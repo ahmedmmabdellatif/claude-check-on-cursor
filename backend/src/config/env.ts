@@ -1,7 +1,10 @@
 import dotenv from 'dotenv';
+import path from 'path';
 
 // Load .env file from backend root
-dotenv.config();
+// When using tsx, we need to explicitly resolve the path
+const envPath = path.resolve(process.cwd(), '.env');
+dotenv.config({ path: envPath });
 
 interface EnvConfig {
   PORT: number;

@@ -1,24 +1,14 @@
 import { Request, Response } from 'express';
-import prisma from '../db/client';
+import { db } from '../db/sqlite-client';
 
 export class PlanController {
   async listPlans(req: Request, res: Response): Promise<void> {
     try {
-      const plans = await prisma.parsedPlan.findMany({
-        select: {
-          id: true,
-          createdAt: true,
-          sourceFilename: true,
-          status: true,
-          metaTitle: true,
-          metaCoachName: true,
-          metaDurationWeeks: true,
-          pagesCount: true,
-        },
-        orderBy: {
-          createdAt: 'desc',
-        },
-      });
+      const plans = db.prepare(`
+        SELECT id, createdAt, sourceFilename, status, metaTitle, metaCoachName, metaDurationWeeks, pagesCount
+        FROM ParsedPlan
+        ORDER BY createdAt DESC
+      `).all();
 
       res.status(200).json({
         plans,
@@ -37,17 +27,14 @@ export class PlanController {
     try {
       const { id } = req.params;
 
-      const plan = await prisma.parsedPlan.findUnique({
-        where: { id },
-        include: {
-          mediaAssets: true,
-        },
-      });
+      const plan = db.prepare('SELECT * FROM ParsedPlan WHERE id = ?').get(id) as any;
 
       if (!plan) {
         res.status(404).json({ error: 'Plan not found' });
         return;
       }
+
+      const mediaAssets = db.prepare('SELECT * FROM MediaAsset WHERE planId = ?').all(id);
 
       // Parse JSON strings back to objects
       const rawJson = JSON.parse(plan.rawJson);
@@ -67,7 +54,7 @@ export class PlanController {
         },
         data: rawJson,
         debug: debugJson,
-        mediaAssets: plan.mediaAssets,
+        mediaAssets,
       });
     } catch (error) {
       console.error('[Plan Controller] Error fetching plan:', error);
@@ -82,15 +69,11 @@ export class PlanController {
     try {
       const { id } = req.params;
 
-      const plan = await prisma.parsedPlan.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          sourceFilename: true,
-          pagesCount: true,
-          debugJson: true,
-        },
-      });
+      const plan = db.prepare(`
+        SELECT id, sourceFilename, pagesCount, debugJson
+        FROM ParsedPlan
+        WHERE id = ?
+      `).get(id) as any;
 
       if (!plan) {
         res.status(404).json({ error: 'Plan not found' });

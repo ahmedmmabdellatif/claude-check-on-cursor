@@ -3,7 +3,7 @@ import cors from 'cors';
 import { config } from './config/env';
 import parseRoutes from './routes/parse.routes';
 import planRoutes from './routes/plan.routes';
-import prisma from './db/client';
+import { db } from './db/sqlite-client';
 
 const app = express();
 
@@ -51,13 +51,13 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...');
-  await prisma.$disconnect();
+  db.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
   console.log('\nShutting down gracefully...');
-  await prisma.$disconnect();
+  db.close();
   process.exit(0);
 });
 

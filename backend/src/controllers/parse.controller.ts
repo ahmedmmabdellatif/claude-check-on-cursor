@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { pdfService } from '../services/pdf.service';
 import { workerService } from '../services/worker.service';
 import { mergeService } from '../services/merge.service';
-import prisma from '../db/client';
+import { db, generateId } from '../db/sqlite-client';
 import { FitnessPlanFields } from '../types/fitnessPlan';
 
 export class ParseController {
@@ -19,17 +19,13 @@ export class ParseController {
       console.log(`[Parse Controller] Starting parse for: ${filename}`);
 
       // Create initial database record
-      const parsedPlan = await prisma.parsedPlan.create({
-        data: {
-          sourceFilename: filename,
-          pagesCount: 0,
-          status: 'processing',
-          rawJson: '{}',
-          debugJson: '{}',
-        },
-      });
+      const planId = generateId();
+      const now = new Date().toISOString();
 
-      const planId = parsedPlan.id;
+      db.prepare(`
+        INSERT INTO ParsedPlan (id, createdAt, updatedAt, sourceFilename, pagesCount, status, rawJson, debugJson)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(planId, now, now, filename, 0, 'processing', '{}', '{}');
 
       try {
         // Step 1: Split PDF into pages
@@ -37,10 +33,9 @@ export class ParseController {
         const pages = await pdfService.splitPdf(fileBuffer);
 
         // Update page count
-        await prisma.parsedPlan.update({
-          where: { id: planId },
-          data: { pagesCount: pages.length },
-        });
+        db.prepare(`
+          UPDATE ParsedPlan SET pagesCount = ?, updatedAt = ? WHERE id = ?
+        `).run(pages.length, new Date().toISOString(), planId);
 
         // Step 2: Send each page to worker
         console.log('[Parse Controller] Step 2: Sending pages to worker...');
@@ -65,17 +60,15 @@ export class ParseController {
 
         // Step 4: Save to database
         console.log('[Parse Controller] Step 4: Saving to database...');
-        const updatedPlan = await prisma.parsedPlan.update({
-          where: { id: planId },
-          data: {
-            status: 'completed',
-            rawJson: JSON.stringify(mergedResult),
-            debugJson: JSON.stringify(debugJson),
-            metaTitle,
-            metaCoachName,
-            metaDurationWeeks,
-          },
-        });
+        const updatedAt = new Date().toISOString();
+
+        db.prepare(`
+          UPDATE ParsedPlan
+          SET status = ?, rawJson = ?, debugJson = ?, metaTitle = ?, metaCoachName = ?, metaDurationWeeks = ?, updatedAt = ?
+          WHERE id = ?
+        `).run('completed', JSON.stringify(mergedResult), JSON.stringify(debugJson), metaTitle, metaCoachName, metaDurationWeeks, updatedAt, planId);
+
+        const updatedPlan = db.prepare('SELECT * FROM ParsedPlan WHERE id = ?').get(planId) as any;
 
         console.log(`[Parse Controller] Successfully completed parse for plan ${planId}`);
 
@@ -92,15 +85,18 @@ export class ParseController {
         });
       } catch (processingError) {
         // Mark as failed
-        await prisma.parsedPlan.update({
-          where: { id: planId },
-          data: {
-            status: 'failed',
-            debugJson: JSON.stringify({
-              error: processingError instanceof Error ? processingError.message : 'Unknown error',
-            }),
-          },
-        });
+        db.prepare(`
+          UPDATE ParsedPlan
+          SET status = ?, debugJson = ?, updatedAt = ?
+          WHERE id = ?
+        `).run(
+          'failed',
+          JSON.stringify({
+            error: processingError instanceof Error ? processingError.message : 'Unknown error',
+          }),
+          new Date().toISOString(),
+          planId
+        );
 
         throw processingError;
       }
