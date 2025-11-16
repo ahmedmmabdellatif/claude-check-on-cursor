@@ -1,8 +1,7 @@
 import dotenv from 'dotenv';
-import path from 'path';
 
-// Load .env file
-dotenv.config({ path: path.join(__dirname, '../../.env') });
+// Load .env file from backend root
+dotenv.config();
 
 interface EnvConfig {
   PORT: number;
