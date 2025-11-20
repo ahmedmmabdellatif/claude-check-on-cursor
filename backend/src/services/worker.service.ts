@@ -1,79 +1,79 @@
 import axios from 'axios';
-import { config } from '../config/env';
-import { PageParseRequest, PageParseResponse } from '../types/fitnessPlan';
+import { UniversalFitnessPlan, PageParseResponse } from '../types/fitnessPlan';
+
+const WORKER_URL = 'https://pdf-relay.ahmed-m-m-abdellatif.workers.dev/';
+
+interface PageData {
+  pageNumber: number;
+  imageBase64: string | null;
+  text: string;
+}
 
 export class WorkerService {
-  private workerUrl: string;
-
-  constructor() {
-    this.workerUrl = config.WORKER_URL;
-  }
-
-  async parsePageWithWorker(
-    pageNumber: number,
-    imageBase64: string | null,
-    text: string
-  ): Promise<PageParseResponse> {
+  async parsePageWithWorker(pageData: PageData): Promise<PageParseResponse> {
+    const start = Date.now();
     try {
-      console.log(`[Worker Service] Sending page ${pageNumber} to worker...`);
+      console.log(`[Worker Service] Sending page ${pageData.pageNumber} to worker...`);
 
-      const requestBody: PageParseRequest = {
-        page_number: pageNumber,
-        image_base64: imageBase64,
-        text,
+      const payload = {
+        page_number: pageData.pageNumber,
+        image_base64: pageData.imageBase64,
+        text: pageData.text,
       };
 
-      const response = await axios.post<PageParseResponse>(
-        this.workerUrl,
-        requestBody,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          timeout: 120000, // 2 minute timeout for OpenAI processing
-        }
-      );
+      const response = await axios.post(WORKER_URL, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        timeout: 60000, // 60s timeout for worker
+      });
 
-      if (!response.data || !response.data.domains) {
-        throw new Error('Invalid response from worker: missing domains array');
+      const end = Date.now();
+      console.log(`[WorkerService] Page ${pageData.pageNumber} completed in ${end - start} ms`);
+
+      if (response.status !== 200) {
+        throw new Error(`Worker returned status ${response.status}`);
       }
 
-      console.log(`[Worker Service] Successfully parsed page ${pageNumber}`);
-      return response.data;
+      const data = response.data;
+
+      // Basic validation to ensure it matches universal schema structure
+      if (!data || typeof data !== 'object') {
+        throw new Error('Worker returned invalid JSON');
+      }
+
+      return data as PageParseResponse;
     } catch (error) {
-      console.error(`[Worker Service] Error parsing page ${pageNumber}:`, error);
+      const end = Date.now();
+      console.error(`[Worker Service] Error parsing page ${pageData.pageNumber} after ${end - start} ms:`, error);
 
-      if (axios.isAxiosError(error)) {
-        if (error.response) {
-          throw new Error(
-            `Worker API error (${error.response.status}): ${JSON.stringify(error.response.data)}`
-          );
-        } else if (error.request) {
-          throw new Error('Worker API did not respond. Check WORKER_URL and network connectivity.');
+      // Return fallback error object
+      return {
+        unclassified: [pageData.text],
+        debug: {
+          pages: [{
+            page_number: pageData.pageNumber,
+            raw_text: pageData.text,
+            notes: `FAILED TO PARSE: ${error instanceof Error ? error.message : 'Unknown error'}`
+          }]
         }
-      }
-
-      throw new Error(
-        `Failed to parse page ${pageNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+      };
     }
   }
 
-  async parseAllPages(
-    pages: Array<{ pageNumber: number; imageBase64: string | null; text: string }>
-  ): Promise<PageParseResponse[]> {
+  async parseAllPages(pages: PageData[]): Promise<PageParseResponse[]> {
+    console.log(`[Worker Service] Processing ${pages.length} pages...`);
+
     const results: PageParseResponse[] = [];
 
     for (const page of pages) {
-      const result = await this.parsePageWithWorker(
-        page.pageNumber,
-        page.imageBase64,
-        page.text
-      );
+      const pageStart = Date.now();
+      console.log(`[WorkerService] Starting page ${page.pageNumber} at ${new Date().toISOString()}`);
+      const result = await this.parsePageWithWorker(page);
       results.push(result);
+      console.log(`[WorkerService] Finished page ${page.pageNumber} (Total: ${Date.now() - pageStart} ms)`);
     }
 
-    console.log(`[Worker Service] Completed parsing ${pages.length} pages`);
     return results;
   }
 }

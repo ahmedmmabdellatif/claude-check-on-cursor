@@ -20,8 +20,13 @@ const upload = multer({
 });
 
 // POST /api/parse - Upload and parse PDF
-router.post('/', upload.single('file'), (req, res) => {
-  parseController.parsePdf(req, res);
+// Frontend sends 'pdf' field, so we must match it here
+router.post('/', upload.single('pdf'), async (req, res, next) => {
+  try {
+    await parseController.parsePdf(req, res);
+  } catch (error) {
+    next(error);
+  }
 });
 
 export default router;

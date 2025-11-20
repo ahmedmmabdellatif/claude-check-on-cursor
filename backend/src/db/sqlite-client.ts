@@ -3,8 +3,8 @@ import path from 'path';
 import { config } from '../config/env';
 
 // Extract the database path from DATABASE_URL (file:./dev.db -> ./dev.db)
-const dbPath = config.DATABASE_URL.replace('file:', '');
-const fullDbPath = path.resolve(process.cwd(), dbPath);
+// Force absolute path to backend root to avoid CWD issues
+const fullDbPath = path.resolve(__dirname, '../../dev.db');
 
 // Create SQLite database connection
 export const db = new Database(fullDbPath);
