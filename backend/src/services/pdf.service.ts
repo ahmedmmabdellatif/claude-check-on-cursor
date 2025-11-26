@@ -1,19 +1,33 @@
 import pdfParse from 'pdf-parse';
 
-interface PageData {
+/**
+ * PdfPage: Mechanical page extraction result (no AI interpretation)
+ */
+export type PdfPage = {
   pageNumber: number;
-  imageBase64: string | null;
-  text: string;
-}
+  text?: string;
+  imageBase64?: string;
+};
 
 export class PdfService {
-  async splitPdf(fileBuffer: Buffer): Promise<PageData[]> {
+  /**
+   * Extracts pages from PDF buffer (mechanical split only, no AI).
+   * Returns ordered array of page objects with text and optional images.
+   */
+  async extractPagesFromPdf(fileBuffer: Buffer): Promise<PdfPage[]> {
+    return this.splitPdf(fileBuffer);
+  }
+
+  /**
+   * Split PDF into pages (mechanical extraction only).
+   */
+  async splitPdf(fileBuffer: Buffer): Promise<PdfPage[]> {
     try {
       const data = await pdfParse(fileBuffer);
       const numPages = data.numpages;
       const allText = data.text;
 
-      const pages: PageData[] = [];
+      const pages: PdfPage[] = [];
 
       // Split text by page breaks (rough estimation)
       const avgCharsPerPage = Math.ceil(allText.length / numPages);
@@ -25,8 +39,8 @@ export class PdfService {
 
         pages.push({
           pageNumber: pageNum,
-          imageBase64: null, // No image rendering in this version
           text: pageText || `[Page ${pageNum} - No text extracted]`,
+          // imageBase64: undefined (not implemented yet)
         });
 
         console.log(`[PDF Service] Processed page ${pageNum}/${numPages}`);

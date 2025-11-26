@@ -1,5 +1,9 @@
+// TODO: legacy view, can be removed after verifying new PlanViewerScreen
+// This file is kept for reference but should not be used in the main flow.
+// Use components/screens/PlanViewerScreen.tsx instead.
+
 import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Platform, Text } from 'react-native';
 import { ArrowLeft, Activity, Utensils, FileText, Info, Heart, Zap, BookOpen, Pill, Terminal, Code, Copy } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { ScreenLayout } from '../ScreenLayout';
@@ -42,36 +46,106 @@ const DebugSection = ({ pages }: { pages: any[] }) => (
 );
 
 const JsonSection = ({ data }: { data: any }) => {
+    console.log('[JsonSection] Rendering with data:', data ? 'DATA EXISTS' : 'NO DATA');
+    console.log('[JsonSection] Data keys:', data ? Object.keys(data) : 'N/A');
+    console.log('[JsonSection] Data type:', typeof data);
+
     const handleCopy = async () => {
-        await Clipboard.setStringAsync(JSON.stringify(data, null, 2));
+        try {
+            const jsonString = JSON.stringify(data, null, 2);
+            await Clipboard.setStringAsync(jsonString);
+            console.log('[JsonSection] Copied', jsonString.length, 'characters to clipboard');
+        } catch (e) {
+            console.error('[JsonSection] Failed to copy JSON', e);
+        }
     };
 
+    if (!data) {
+        console.log('[JsonSection] Data is null/undefined');
+        return (
+            <Card variant="outlined">
+                <Typography variant="body" color={COLORS.status.error} align="center">
+                    ERROR: No data received by JsonSection
+                </Typography>
+            </Card>
+        );
+    }
+
+    const jsonString = JSON.stringify(data, null, 2);
+    const dataKeys = Object.keys(data);
+
+    console.log('[JsonSection] JSON string length:', jsonString.length);
+    console.log('[JsonSection] First 200 chars:', jsonString.substring(0, 200));
+
     return (
-        <View style={{ gap: SPACING.s }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                <TouchableOpacity
-                    onPress={handleCopy}
-                    style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: 6,
-                        backgroundColor: COLORS.background.tertiary,
-                        paddingHorizontal: SPACING.m,
-                        paddingVertical: SPACING.s,
-                        borderRadius: BORDER_RADIUS.s
-                    }}
-                >
-                    <Copy size={16} color={COLORS.primary.light} />
-                    <Typography variant="caption" color={COLORS.primary.light}>Copy JSON</Typography>
-                </TouchableOpacity>
-            </View>
-            <Card variant="outlined" style={{ backgroundColor: '#0F172A' }}>
-                <ScrollView horizontal>
+        <View style={{ gap: SPACING.m }}>
+            {/* Debug Info */}
+            <Card variant="glass">
+                <Typography variant="label" style={{ marginBottom: SPACING.s }}>Data Summary</Typography>
+                <Text style={{ color: COLORS.text.primary, fontSize: 12 }}>
+                    Keys: {dataKeys.join(', ')}
+                </Text>
+                <Text style={{ color: COLORS.text.secondary, fontSize: 12, marginTop: 4 }}>
+                    JSON Size: {jsonString.length} characters
+                </Text>
+            </Card>
+
+            {/* Copy Button - More Prominent */}
+            <Card variant="glass" style={{ marginBottom: SPACING.s }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <View>
-                        <Typography variant="caption" style={{ fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: COLORS.text.secondary }}>
-                            {JSON.stringify(data, null, 2)}
+                        <Typography variant="label">Raw JSON Data</Typography>
+                        <Typography variant="caption" color={COLORS.text.secondary}>
+                            {jsonString.length.toLocaleString()} characters
                         </Typography>
                     </View>
+                    <TouchableOpacity
+                        onPress={handleCopy}
+                        style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 6,
+                            backgroundColor: COLORS.primary.main,
+                            paddingHorizontal: SPACING.m,
+                            paddingVertical: SPACING.s,
+                            borderRadius: BORDER_RADIUS.s
+                        }}
+                    >
+                        <Copy size={18} color="#FFFFFF" />
+                        <Typography variant="body" style={{ color: '#FFFFFF', fontWeight: 'bold' }}>
+                            Copy JSON
+                        </Typography>
+                    </TouchableOpacity>
+                </View>
+            </Card>
+
+            {/* JSON Display - Formatted JSON */}
+            <Card variant="outlined" style={{ backgroundColor: '#0F172A', minHeight: 300, maxHeight: 600 }}>
+                <View style={{ padding: SPACING.s, borderBottomWidth: 1, borderBottomColor: 'rgba(255, 255, 255, 0.1)' }}>
+                    <Typography variant="caption" color={COLORS.text.secondary}>
+                        Scroll to view full JSON ({jsonString.length.toLocaleString()} characters)
+                    </Typography>
+                </View>
+                <ScrollView 
+                    horizontal 
+                    nestedScrollEnabled
+                    showsHorizontalScrollIndicator={true}
+                    showsVerticalScrollIndicator={true}
+                    style={{ flex: 1 }}
+                >
+                    <ScrollView nestedScrollEnabled style={{ padding: SPACING.m }}>
+                        <Text
+                            style={{
+                                fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+                                color: '#E2E8F0',
+                                fontSize: 11,
+                                lineHeight: 16
+                            }}
+                            selectable={true}
+                        >
+                            {jsonString}
+                        </Text>
+                    </ScrollView>
                 </ScrollView>
             </Card>
         </View>
@@ -87,6 +161,9 @@ type Section = 'overview' | 'workouts' | 'nutrition' | 'cardio' | 'rehab' | 'sup
 
 export const FitnessPlanScreen: React.FC<FitnessPlanScreenProps> = ({ plan, onBack }) => {
     const [activeSection, setActiveSection] = useState<Section>('overview');
+
+    console.log('[FitnessPlanScreen] Plan received:', plan ? 'YES' : 'NO');
+    console.log('[FitnessPlanScreen] Active section:', activeSection);
 
     const renderSection = () => {
         switch (activeSection) {
@@ -115,6 +192,7 @@ export const FitnessPlanScreen: React.FC<FitnessPlanScreenProps> = ({ plan, onBa
             case 'debug':
                 return <DebugSection pages={plan.debug?.pages || []} />;
             case 'json':
+                console.log('[FitnessPlanScreen] Rendering JsonSection with plan');
                 return <JsonSection data={plan} />;
             case 'overview':
             default:

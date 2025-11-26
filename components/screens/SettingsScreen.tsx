@@ -9,7 +9,7 @@ import { COLORS, SPACING } from '../../constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface SettingsScreenProps {
-    onReset: () => void;
+    onReset: () => Promise<void>;
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onReset }) => {
@@ -26,11 +26,18 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onReset }) => {
                         try {
                             const keys = await AsyncStorage.getAllKeys();
                             const appKeys = keys.filter(k => k.startsWith('parsed_doc_'));
-                            await AsyncStorage.multiRemove(appKeys);
-                            onReset();
+                            
+                            if (appKeys.length > 0) {
+                                await AsyncStorage.multiRemove(appKeys);
+                            }
+                            
+                            // Call onReset to refresh UI state
+                            await onReset();
+                            
                             Alert.alert("Success", "All data has been reset.");
                         } catch (e) {
-                            Alert.alert("Error", "Failed to clear data.");
+                            console.error("Error clearing data:", e);
+                            Alert.alert("Error", `Failed to clear data: ${e instanceof Error ? e.message : 'Unknown error'}`);
                         }
                     }
                 }

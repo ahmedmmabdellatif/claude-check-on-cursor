@@ -19,11 +19,21 @@ const upload = multer({
   },
 });
 
-// POST /api/parse - Upload and parse PDF
-// Frontend sends 'pdf' field, so we must match it here
+// POST /api/parse - Upload PDF and create async job
+// Returns: { jobId, status: "pending" }
 router.post('/', upload.single('pdf'), async (req, res, next) => {
   try {
     await parseController.parsePdf(req, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/parse/:jobId/status - Get job status
+// Returns: { jobId, status, progress, result?, error? }
+router.get('/:jobId/status', async (req, res, next) => {
+  try {
+    await parseController.getJobStatus(req, res);
   } catch (error) {
     next(error);
   }

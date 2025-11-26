@@ -1,131 +1,186 @@
-import { Request, Response } from 'express';
-import { pdfService } from '../services/pdf.service';
-import { workerService } from '../services/worker.service';
-import { mergeService } from '../services/merge.service';
-import { db, generateId } from '../db/sqlite-client';
+// parse.controller.ts - Express controller for async chunked PDF parsing (v5.5)
+//
+// Responsibilities:
+//   - Accept PDF upload and create async job
+//   - Return jobId immediately (non-blocking)
+//   - Provide job status endpoint for polling
+//   - Process PDFs in chunks in background
+
+import { Request, Response } from "express";
+import { parseJobService } from "../services/parseJob.service";
+import { pdfChunkService } from "../services/pdfChunk.service";
+import { jobDb } from "../db/job-schema";
+import { generateId } from "../db/sqlite-client";
+import { uploadPdfToR2 } from "../services/r2Client";
+
+// Pages per chunk (configurable) - reduced for better performance
+const PAGES_PER_CHUNK = 3;
 
 export class ParseController {
+  /**
+   * POST /api/parse
+   * Creates an async job and returns jobId immediately.
+   */
   async parsePdf(req: Request, res: Response): Promise<void> {
-    const totalStart = Date.now();
-    const logs: string[] = [];
-
-    // Helper to log to both console and array
-    const log = (message: string) => {
-      console.log(message);
-      logs.push(`[${new Date().toISOString().split('T')[1].split('.')[0]}] ${message}`);
-    };
-
+    const requestStartTime = Date.now();
+    const requestTimestamp = new Date().toISOString();
+    
+    console.log(`[ParseController] Incoming /api/parse at ${requestTimestamp}, method: ${req.method}`);
+    
     try {
       if (!req.file) {
-        res.status(400).json({ error: 'No PDF file uploaded' });
+        console.log(`[ParseController] Missing PDF file upload (field 'pdf') at ${new Date().toISOString()}`);
+        res.status(400).json({ error: "Missing PDF file upload (field 'pdf')" });
         return;
       }
 
-      const fileBuffer = req.file.buffer;
-      const filename = req.file.originalname;
-      const fileSizeMb = (fileBuffer.length / (1024 * 1024)).toFixed(2);
+      const filename = req.file.originalname || "document.pdf";
+      const pdfBuffer = req.file.buffer;
+      const fileSizeMb = (pdfBuffer.length / (1024 * 1024)).toFixed(2);
 
-      log(`[ParseController] Received PDF: ${filename}, size: ${fileSizeMb} MB`);
+      console.log(`[ParseController] Start reading file/multipart at ${new Date().toISOString()}, filename: ${filename}, size: ${pdfBuffer.length} bytes (${fileSizeMb} MB)`);
 
-      // Create initial database record
-      const planId = generateId();
+      // Create job FIRST (before any heavy work)
+      const jobId = generateId();
       const now = new Date().toISOString();
+      
+      // Generate R2 object key
+      const r2Key = `jobs/${jobId}/source.pdf`;
 
-      db.prepare(`
-        INSERT INTO ParsedPlan (id, createdAt, updatedAt, sourceFilename, pagesCount, status, rawJson, debugJson)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(planId, now, now, filename, 0, 'processing', '{}', '{}');
-
+      // Upload PDF to R2 (this is necessary but should be fast for streaming)
+      const r2UploadStartTime = Date.now();
+      console.log(`[ParseController] ${jobId}: Uploading PDF to R2: ${r2Key} at ${new Date().toISOString()}`);
       try {
-        // Step 1: Split PDF into pages
-        log('[PDFService] Splitting PDF into pages...');
-        const pages = await pdfService.splitPdf(fileBuffer);
-        const pageCount = pages.length;
-        log(`[PDFService] Split into ${pageCount} pages`);
-
-        // Update page count
-        db.prepare(`
-          UPDATE ParsedPlan SET pagesCount = ?, updatedAt = ? WHERE id = ?
-        `).run(pageCount, new Date().toISOString(), planId);
-
-        // Step 2: Send each page to worker
-        log('[WorkerService] Sending pages to worker...');
-
-        const pageResults = await workerService.parseAllPages(pages);
-        log(`[WorkerService] Received results for ${pageResults.length} pages`);
-
-        // Step 3: Merge results
-        log('[MergeService] Merging pages into global plan...');
-        const mergedResult = mergeService.mergePageResults(pageResults);
-
-        // Extract metadata for quick access
-        const metaTitle = mergedResult.meta?.title || mergedResult.meta?.plan_name || 'Untitled Plan';
-        const metaCoachName = mergedResult.meta?.coach_name || null;
-        const metaDurationWeeks = mergedResult.meta?.duration_weeks || null;
-
-        // Prepare debug JSON
-        const debugJson = mergedResult.debug || { pages: [] };
-
-        // Step 4: Save to database
-        log(`[DB] Saving plan ${planId} to database...`);
-        const updatedAt = new Date().toISOString();
-
-        db.prepare(`
-          UPDATE ParsedPlan
-          SET status = ?, rawJson = ?, debugJson = ?, metaTitle = ?, metaCoachName = ?, metaDurationWeeks = ?, updatedAt = ?
-          WHERE id = ?
-        `).run(
-          'completed',
-          JSON.stringify(mergedResult),
-          JSON.stringify(debugJson),
-          metaTitle,
-          metaCoachName,
-          metaDurationWeeks,
-          updatedAt,
-          planId
-        );
-
-        const totalEnd = Date.now();
-        const totalDuration = totalEnd - totalStart;
-        log(`[ParseController] Successfully completed parse for plan ${planId}`);
-        log(`[ParseController] Total pages: ${pageCount}`);
-        log(`[ParseController] TOTAL pipeline time: ${totalDuration} ms`);
-        if (pageCount > 0) {
-          log(`[ParseController] Avg per page: ${(totalDuration / pageCount).toFixed(2)} ms/page`);
-        }
-        log('[ParseController] WARNING: Pages processed sequentially. Consider parallelism.');
-
-        // Return the friendly DTO
-        res.status(200).json({
-          status: 'success',
-          planId,
-          fitnessPlan: mergedResult,
-          logs: logs // Return logs to frontend
-        });
-
-      } catch (error) {
-        console.error('[ParseController] Error during processing:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        log(`[ParseController] Error: ${errorMessage}`);
-
-        db.prepare(`
-          UPDATE ParsedPlan SET status = ?, updatedAt = ? WHERE id = ?
-        `).run('failed', new Date().toISOString(), planId);
-
+        await uploadPdfToR2(pdfBuffer, r2Key);
+        const r2UploadDuration = Date.now() - r2UploadStartTime;
+        console.log(`[ParseController] ${jobId}: Uploaded to R2: ${r2Key} at ${new Date().toISOString()}, took ${r2UploadDuration}ms (${(r2UploadDuration / 1000).toFixed(1)}s)`);
+      } catch (r2Error: any) {
+        console.error(`[ParseController] ${jobId}: R2 upload failed:`, r2Error);
+        const errorMessage = r2Error.message || 'Unknown error';
         res.status(500).json({
-          error: 'Failed to process PDF',
-          message: errorMessage,
-          planId,
-          logs: logs
+          error: `Failed to upload PDF to R2: ${errorMessage}`
         });
+        return;
       }
-    } catch (error) {
-      console.error('[ParseController] Critical error:', error);
-      // Try to return logs even on critical error
+
+      // Create job with minimal info - page count will be computed in background
+      const job = {
+        id: jobId,
+        status: 'pending' as const,
+        createdAt: now,
+        updatedAt: now,
+        startedAt: null,
+        sourceFilename: filename,
+        r2Key,
+        totalPages: 0, // Will be computed in background
+        processedPages: 0,
+        totalChunks: 0, // Will be computed in background
+        processedChunks: 0,
+        resultJson: null,
+        error: null
+      };
+
+      jobDb.create(job);
+
+      console.log(`[ParseController] ${jobId}: Created ParseJob with status: ${job.status}`);
+      console.log(`[ParseController] ${jobId}: Enqueuing job for background processing`);
+
+      // Start background processing (don't await - fire and forget)
+      // Background job will: load from R2, compute page count, chunk, process, merge
+      parseJobService.processPdfFromR2(jobId, r2Key, filename, PAGES_PER_CHUNK)
+        .catch((error: any) => {
+          console.error(`[ParseController] ${jobId}: Background job failed:`, error);
+          const errorMsg = error.message || 'Unknown error';
+          jobDb.updateStatus(jobId, 'error', errorMsg);
+        });
+
+      // Return jobId immediately (non-blocking)
+      const responseTime = Date.now() - requestStartTime;
+      const responseTimestamp = new Date().toISOString();
+      console.log(`[ParseController] Responding to client with jobId=${jobId} at ${responseTimestamp}, total request time: ${responseTime}ms (${(responseTime / 1000).toFixed(1)}s)`);
+      
+      res.status(202).json({
+        jobId,
+        status: 'pending',
+        progress: {
+          processedPages: 0,
+          totalPages: 0, // Will be updated by background job
+          processedChunks: 0,
+          totalChunks: 0 // Will be updated by background job
+        }
+      });
+
+    } catch (error: any) {
+      console.error('[ParseController] Error creating job:', error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown critical error',
-        logs: logs
+        error: error.message || 'Failed to create parse job'
+      });
+    }
+  }
+
+  /**
+   * GET /api/parse/:jobId/status
+   * Returns job status and result when done.
+   */
+  async getJobStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const { jobId } = req.params;
+
+      if (!jobId) {
+        res.status(400).json({ error: 'Missing jobId parameter' });
+        return;
+      }
+
+      const job = jobDb.getById(jobId);
+
+      if (!job) {
+        res.status(404).json({ error: 'Job not found' });
+        return;
+      }
+
+      // Build response
+      const response: any = {
+        jobId: job.id,
+        status: job.status,
+        progress: {
+          processedPages: job.processedPages,
+          totalPages: job.totalPages,
+          processedChunks: job.processedChunks,
+          totalChunks: job.totalChunks
+        }
+      };
+
+      // Include result if done
+      if (job.status === 'done' && job.resultJson) {
+        try {
+          response.result = JSON.parse(job.resultJson);
+        } catch (e) {
+          console.error(`[ParseController] Error parsing result JSON for job ${jobId}:`, e);
+          response.error = 'Failed to parse result JSON';
+        }
+      }
+
+      // Include normalized plan if available (preferred for UI)
+      if (job.status === 'done' && job.normalizedJson) {
+        try {
+          response.normalizedPlan = JSON.parse(job.normalizedJson);
+        } catch (e) {
+          console.error(`[ParseController] Error parsing normalized JSON for job ${jobId}:`, e);
+          // Don't fail - normalized plan is optional
+        }
+      }
+
+      // Include error if failed
+      if (job.status === 'error' && job.error) {
+        response.error = job.error;
+      }
+
+      res.status(200).json(response);
+
+    } catch (error: any) {
+      console.error('[ParseController] Error getting job status:', error);
+      res.status(500).json({
+        error: error.message || 'Failed to get job status'
       });
     }
   }

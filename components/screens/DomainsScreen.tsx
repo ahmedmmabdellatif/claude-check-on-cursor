@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { FileText, ChevronRight, Trash2, Activity } from 'lucide-react-native';
+import { FileText, ChevronRight, Trash2, Activity, HelpCircle } from 'lucide-react-native';
 import { ScreenLayout } from '../ScreenLayout';
 import { Card } from '../ui/Card';
 import { Typography } from '../ui/Typography';
@@ -9,15 +9,17 @@ import { COLORS, SPACING, BORDER_RADIUS } from '../../constants/theme';
 interface DomainsScreenProps {
     documents: any[];
     onSelectDocument: (doc: any) => void;
-    onDeleteDocument: (fileName: string, timestamp: number) => void;
+    onDeleteDocument: (docId: string) => void;
     onSelectDomain: (domainId: string) => void;
+    onOpenHelp?: () => void;
 }
 
 export const DomainsScreen: React.FC<DomainsScreenProps> = ({
     documents,
     onSelectDocument,
     onDeleteDocument,
-    onSelectDomain
+    onSelectDomain,
+    onOpenHelp
 }) => {
     // Group documents by domain (currently only fitness_plan supported)
     const fitnessDocs = documents.filter(doc => doc.plan);
@@ -25,7 +27,14 @@ export const DomainsScreen: React.FC<DomainsScreenProps> = ({
     return (
         <ScreenLayout>
             <View style={styles.header}>
-                <Typography variant="h1">My Domains</Typography>
+                <View style={styles.headerTop}>
+                    <Typography variant="h1">My Documents</Typography>
+                    {onOpenHelp && (
+                        <TouchableOpacity onPress={onOpenHelp} style={styles.helpButton}>
+                            <HelpCircle size={24} color={COLORS.primary.light} />
+                        </TouchableOpacity>
+                    )}
+                </View>
                 <Typography variant="body" color={COLORS.text.secondary}>
                     Manage your parsed documents
                 </Typography>
@@ -87,7 +96,7 @@ export const DomainsScreen: React.FC<DomainsScreenProps> = ({
                                     </View>
                                     <View style={{ flex: 1 }}>
                                         <Typography variant="body" style={{ fontWeight: '600' }}>
-                                            {doc.fileName}
+                                            {doc.name || 'Untitled Document'}
                                         </Typography>
                                         <Typography variant="caption" color={COLORS.text.secondary}>
                                             {new Date(doc.timestamp).toLocaleDateString()} • {new Date(doc.timestamp).toLocaleTimeString()}
@@ -97,7 +106,7 @@ export const DomainsScreen: React.FC<DomainsScreenProps> = ({
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                     style={styles.deleteBtn}
-                                    onPress={() => onDeleteDocument(doc.fileName, doc.timestamp)}
+                                    onPress={() => onDeleteDocument(doc.id)}
                                 >
                                     <Trash2 color={COLORS.status.error} size={18} />
                                 </TouchableOpacity>
@@ -113,6 +122,16 @@ export const DomainsScreen: React.FC<DomainsScreenProps> = ({
 const styles = StyleSheet.create({
     header: {
         marginBottom: SPACING.l,
+        paddingHorizontal: SPACING.m,
+    },
+    headerTop: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: SPACING.xs,
+    },
+    helpButton: {
+        padding: SPACING.xs,
     },
     content: {
         paddingBottom: SPACING.xl,

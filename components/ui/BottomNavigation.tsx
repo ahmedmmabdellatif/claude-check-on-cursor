@@ -1,28 +1,30 @@
 import React from 'react';
 import { View, TouchableOpacity, StyleSheet, Platform } from 'react-native';
-import { Home, FileText, Settings } from 'lucide-react-native';
+import { Home, FileText, Settings, Terminal, Calendar, TrendingUp } from 'lucide-react-native';
 import { Typography } from './Typography';
 import { COLORS, SPACING, BORDER_RADIUS } from '../../constants/theme';
 
-export type Tab = 'upload' | 'domains' | 'settings';
+export type Tab = 'upload' | 'domains' | 'journey' | 'progress' | 'troubleshooting';
 
 interface BottomNavigationProps {
-    currentTab: Tab;
+    activeTab: Tab;
     onTabChange: (tab: Tab) => void;
 }
 
-export const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentTab, onTabChange }) => {
+export const BottomNavigation: React.FC<BottomNavigationProps> = ({ activeTab, onTabChange }) => {
     const tabs = [
         { id: 'upload', label: 'Home', icon: Home },
-        { id: 'domains', label: 'Domains', icon: FileText },
-        { id: 'settings', label: 'Settings', icon: Settings },
+        { id: 'domains', label: 'Documents', icon: FileText },
+        { id: 'journey', label: 'Journey', icon: Calendar },
+        { id: 'progress', label: 'Progress', icon: TrendingUp },
+        { id: 'troubleshooting', label: 'Logs', icon: Terminal },
     ] as const;
 
     return (
         <View style={styles.container}>
             <View style={styles.content}>
                 {tabs.map((tab) => {
-                    const isActive = currentTab === tab.id;
+                    const isActive = activeTab === tab.id;
                     const Icon = tab.icon;
 
                     return (

@@ -1,80 +1,120 @@
+// worker.service.ts - Cloudflare Worker proxy for chunked PDF parsing
+// Sends PDF chunks (or full PDF) to the Cloudflare Worker
+// Contract: { pdf_base64: string, filename?: string }
+
 import axios from 'axios';
-import { UniversalFitnessPlan, PageParseResponse } from '../types/fitnessPlan';
+import { UniversalFitnessPlan } from '../types/fitnessPlan';
+import { config } from '../config/env';
 
-const WORKER_URL = 'https://pdf-relay.ahmed-m-m-abdellatif.workers.dev/';
-
-interface PageData {
-  pageNumber: number;
-  imageBase64: string | null;
-  text: string;
-}
+// Timeout constants
+const CHUNK_TIMEOUT_MS = 120 * 1000; // 120 seconds per chunk
+const FULL_PDF_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes for full PDF
 
 export class WorkerService {
-  async parsePageWithWorker(pageData: PageData): Promise<PageParseResponse> {
-    const start = Date.now();
-    try {
-      console.log(`[Worker Service] Sending page ${pageData.pageNumber} to worker...`);
+  private workerUrl: string;
 
-      const payload = {
-        page_number: pageData.pageNumber,
-        image_base64: pageData.imageBase64,
-        text: pageData.text,
-      };
-
-      const response = await axios.post(WORKER_URL, payload, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        timeout: 60000, // 60s timeout for worker
-      });
-
-      const end = Date.now();
-      console.log(`[WorkerService] Page ${pageData.pageNumber} completed in ${end - start} ms`);
-
-      if (response.status !== 200) {
-        throw new Error(`Worker returned status ${response.status}`);
-      }
-
-      const data = response.data;
-
-      // Basic validation to ensure it matches universal schema structure
-      if (!data || typeof data !== 'object') {
-        throw new Error('Worker returned invalid JSON');
-      }
-
-      return data as PageParseResponse;
-    } catch (error) {
-      const end = Date.now();
-      console.error(`[Worker Service] Error parsing page ${pageData.pageNumber} after ${end - start} ms:`, error);
-
-      // Return fallback error object
-      return {
-        unclassified: [pageData.text],
-        debug: {
-          pages: [{
-            page_number: pageData.pageNumber,
-            raw_text: pageData.text,
-            notes: `FAILED TO PARSE: ${error instanceof Error ? error.message : 'Unknown error'}`
-          }]
-        }
-      };
+  constructor(workerUrl?: string) {
+    const url = workerUrl || process.env.PROCESSOR_URL || process.env.WORKER_URL || config.WORKER_URL || 'https://pdf-relay.ahmed-m-m-abdellatif.workers.dev/';
+    if (!url) {
+      throw new Error("PROCESSOR_URL or WORKER_URL is not set. Please configure the Cloudflare Worker endpoint.");
     }
+    this.workerUrl = url;
   }
 
-  async parseAllPages(pages: PageData[]): Promise<PageParseResponse[]> {
-    console.log(`[Worker Service] Processing ${pages.length} pages...`);
-
-    const results: PageParseResponse[] = [];
-
-    for (const page of pages) {
-      const pageStart = Date.now();
-      console.log(`[WorkerService] Starting page ${page.pageNumber} at ${new Date().toISOString()}`);
-      const result = await this.parsePageWithWorker(page);
-      results.push(result);
-      console.log(`[WorkerService] Finished page ${page.pageNumber} (Total: ${Date.now() - pageStart} ms)`);
+  /**
+   * Sends a PDF chunk (or full PDF) to the Cloudflare Worker.
+   * Uses shorter timeout for chunks, longer for full PDFs.
+   *
+   * @param pdfBuffer - Raw PDF bytes (chunk or full PDF)
+   * @param filename - Original filename (optional, used only for OpenAI context)
+   * @param isChunk - Whether this is a chunk (uses shorter timeout)
+   * @param pageRange - Page range string for logging (e.g., "1-5")
+   */
+  async parseFullPdf(
+    pdfBuffer: Buffer,
+    filename: string = "document.pdf",
+    isChunk: boolean = true,
+    pageRange?: string
+  ): Promise<UniversalFitnessPlan> {
+    if (!pdfBuffer || !Buffer.isBuffer(pdfBuffer)) {
+      throw new Error("Invalid pdfBuffer: expected a Buffer instance.");
     }
 
-    return results;
+    // Convert raw bytes → base64
+    const pdfBase64 = pdfBuffer.toString("base64");
+    const timeout = isChunk ? CHUNK_TIMEOUT_MS : FULL_PDF_TIMEOUT_MS;
+    const rangeLabel = pageRange || (isChunk ? 'chunk' : 'full PDF');
+
+    console.log(`[WorkerService] Calling Worker for ${rangeLabel}, payload size (base64 length): ${pdfBase64.length}, timeout: ${timeout / 1000}s`);
+
+    const payload = {
+      pdf_base64: pdfBase64,
+      filename
+    };
+
+    try {
+      const response = await axios.post(this.workerUrl, payload, {
+        headers: {
+          "Content-Type": "application/json"
+        },
+        timeout: timeout, // axios timeout in milliseconds
+      });
+
+      console.log(`[WorkerService] Worker response for ${rangeLabel}, status: ${response.status}`);
+
+      if (response.status !== 200) {
+        const json = response.data;
+        const errMsg =
+          json?.error ||
+          `Worker call failed with status ${response.status}: ${JSON.stringify(json)}`;
+
+        const error = new Error(errMsg) as Error & { status?: number; workerBody?: any };
+        error.status = response.status;
+        error.workerBody = json;
+        throw error;
+      }
+
+      const json = response.data;
+
+      // Check if Worker returned an error in the JSON body
+      if (json.error) {
+        throw new Error(`Worker error: ${json.error}${json.details ? ` - ${json.details}` : ''}`);
+      }
+
+      return json as UniversalFitnessPlan;
+    } catch (axiosError: any) {
+      // Handle timeout
+      if (axiosError.code === 'ECONNABORTED' || axiosError.message?.includes('timeout') || axiosError.message?.includes('aborted')) {
+        console.error(`[WorkerService] Timeout calling Worker for ${rangeLabel} after ${timeout / 1000}s`);
+        throw new Error(`Worker request timed out after ${timeout / 1000} seconds for ${rangeLabel}`);
+      }
+
+      // Handle axios errors (network errors, 502, etc.)
+      if (axiosError.response) {
+        // Worker returned an error response
+        const status = axiosError.response.status;
+        const json = axiosError.response.data || {};
+        
+        console.error(`[WorkerService] Error calling Worker for ${rangeLabel}, status: ${status}, body:`, JSON.stringify(json).substring(0, 200));
+
+        const errMsg =
+          json?.error ||
+          `Worker call failed with status ${status}: ${JSON.stringify(json)}`;
+
+        const error = new Error(errMsg) as Error & { status?: number; workerBody?: any };
+        error.status = status;
+        error.workerBody = json;
+        throw error;
+      } else if (axiosError.request) {
+        // Request was made but no response received (timeout, network error)
+        console.error(`[WorkerService] Error calling Worker for ${rangeLabel}:`, axiosError.message || 'No response from Worker');
+        throw new Error(`Worker request failed: ${axiosError.message || 'No response from Worker'}`);
+      } else {
+        // Something else happened
+        console.error(`[WorkerService] Error calling Worker for ${rangeLabel}:`, axiosError.message || 'Unknown error');
+        throw new Error(`Worker service error: ${axiosError.message || 'Unknown error'}`);
+      }
+    }
   }
 }
 

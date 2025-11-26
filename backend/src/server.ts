@@ -3,7 +3,11 @@ import cors from 'cors';
 import { config } from './config/env';
 import parseRoutes from './routes/parse.routes';
 import planRoutes from './routes/plan.routes';
+import logsRoutes from './routes/logs.routes';
 import { db } from './db/sqlite-client';
+import { initializeJobTable } from './db/job-schema';
+// Initialize log store early to capture all logs
+import './services/logStore';
 
 const app = express();
 
@@ -30,6 +34,7 @@ app.get('/health', (req: Request, res: Response) => {
 // API Routes
 app.use('/api/parse', parseRoutes);
 app.use('/api/plans', planRoutes);
+app.use('/api/logs', logsRoutes);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
@@ -61,23 +66,28 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
+// Initialize database tables
+initializeJobTable();
+
 // Start server
 const PORT = config.PORT;
 
 app.listen(PORT, () => {
   console.log('==========================================');
-  console.log(`🚀 Fitness PDF Parser Backend v2`);
+  console.log(`🚀 Fitness PDF Parser Backend v2.5 (Async)`);
   console.log(`📡 Server running on port ${PORT}`);
   console.log(`🌍 Environment: ${config.NODE_ENV}`);
   console.log(`🔗 Worker URL: ${config.WORKER_URL}`);
   console.log('==========================================');
   console.log(`\n✅ Ready to accept requests at http://localhost:${PORT}`);
   console.log(`\n📋 API Endpoints:`);
-  console.log(`   POST   /api/parse         - Upload and parse PDF`);
-  console.log(`   GET    /api/plans         - List all parsed plans`);
-  console.log(`   GET    /api/plans/:id     - Get plan by ID`);
-  console.log(`   GET    /api/plans/:id/debug - Get debug data`);
-  console.log(`   GET    /health            - Health check`);
+  console.log(`   POST   /api/parse              - Upload PDF and create async job`);
+  console.log(`   GET    /api/parse/:jobId/status - Get job status (polling)`);
+  console.log(`   GET    /api/plans               - List all parsed plans`);
+  console.log(`   GET    /api/plans/:id          - Get plan by ID`);
+  console.log(`   GET    /api/plans/:id/debug    - Get debug data`);
+  console.log(`   GET    /api/logs               - Get backend logs`);
+  console.log(`   GET    /health                 - Health check`);
   console.log('\n');
 });
 
